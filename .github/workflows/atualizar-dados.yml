@@ -1,0 +1,58 @@
+name: Atualizar dados
+
+# Baixa a chuva diária do CPC (NOAA PSL) e o SPI (NOAA NCEI/NIDIS) e regrava a pasta data/ do site.
+# Dia 5: o mês anterior já fechou no CPC. Dia 20: segunda passada, para pegar o SPI do mês quando
+# a NOAA o publica mais tarde. Sem novidade nos dados, a execução não gera commit.
+# O commit em main dispara a publicação do GitHub Pages.
+on:
+  schedule:
+    - cron: "0 9 5,20 * *" # 06:00 em Brasília
+  workflow_dispatch:
+    inputs:
+      skip_spi:
+        description: "Só a série diária (não baixa o SPI)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atualizar-dados
+  cancel-in-progress: false
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependências
+        run: pip install numpy pandas xarray netcdf4
+
+      - name: Atualizar data/
+        run: python .github/scripts/atualizar_dados.py ${{ inputs.skip_spi && '--skip-spi' || '' }}
+
+      - name: Commit e push se houver dado novo
+        run: |
+          git add data
+          if git diff --cached --quiet; then
+            echo "Sem dados novos." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          fim=$(jq -r '.years[-1].end' data/manifest.json)
+          spi=$(jq -r '.spi.months' data/manifest.json)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Atualiza os dados: chuva diária até $fim"
+          git push
+          {
+            echo "Chuva diária até **$fim**; SPI com **$spi** meses."
+            echo
+            git show --stat --format= HEAD
+          } >> "$GITHUB_STEP_SUMMARY"
